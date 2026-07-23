@@ -92,6 +92,59 @@ def setup_logger(name: str = "CourseGrabber") -> logging.Logger:
 logger = setup_logger()
 
 # =============================================================================
+# 排版辅助函数（统一中英文混排对齐方案）
+# =============================================================================
+
+def _char_width(ch: str) -> int:
+    """返回单个字符的显示宽度（中文=2，ASCII=1）"""
+    code = ord(ch)
+    if 0x4e00 <= code <= 0x9fff or 0x3000 <= code <= 0x303f or 0xff00 <= code <= 0xffef:
+        return 2
+    return 1
+
+
+def display_width(s: str) -> int:
+    """计算字符串的显示宽度（中文=2，ASCII=1）"""
+    return sum(_char_width(ch) for ch in s)
+
+
+def _truncate_to_width(s: str, max_width: int) -> str:
+    """按显示宽度截断，超长末尾加 …，返回后总显示宽度恰好为 max_width"""
+    w = 0
+    cut_idx = len(s)
+    for i, ch in enumerate(s):
+        cw = _char_width(ch)
+        if w + cw > max_width - 1:
+            cut_idx = i
+            break
+        w += cw
+    if cut_idx == len(s):
+        return s
+    result = s[:cut_idx] + "…"
+    pad = max_width - display_width(result)
+    if pad > 0:
+        result += " " * pad
+    return result
+
+
+def pad_str(s: str, width: int, align: str = "left") -> str:
+    """按显示宽度填充/截断字符串，align=left/right/center"""
+    s = str(s) if s is not None else ""
+    dw = display_width(s)
+    if dw > width:
+        return _truncate_to_width(s, width)
+    padding = width - dw
+    if align == "left":
+        return s + " " * padding
+    elif align == "right":
+        return " " * padding + s
+    else:  # center
+        left_pad = padding // 2
+        right_pad = padding - left_pad
+        return " " * left_pad + s + " " * right_pad
+
+
+# =============================================================================
 # 第二部分：配置管理
 # =============================================================================
 
@@ -1031,20 +1084,44 @@ class GrabberEngine:
     # ── 交互式课程展示与选择 ─────────────────────────────────────────────
 
     def _display_course_table(self, courses: List[CourseInfo]) -> None:
-        """以清晰表格格式展示课程列表"""
+        """以清晰表格格式展示课程列表（统一排版方案）"""
+        _COL_DEFS = [
+            ("序号", 5, "right"),
+            ("JxbBh", 12, "left"),
+            ("课程名称", 36, "left"),
+            ("教师", 8, "left"),
+            ("学分", 4, "right"),
+            ("已选/容量", 10, "right"),
+            ("状态", 4, "center"),
+            ("上课时间", 20, "left"),
+        ]
+        _TABLE_WIDTH = sum(w for _, w, _ in _COL_DEFS) + len(_COL_DEFS) + 1
+
+        def _build_row(cols, row_type="data"):
+            parts = []
+            for i, col_def in enumerate(_COL_DEFS):
+                _, w, align = col_def
+                if row_type == "header":
+                    parts.append(pad_str(col_def[0], w, "center"))
+                elif row_type == "sep":
+                    parts.append("━" * w)
+                else:
+                    parts.append(pad_str(str(cols[i]), w, align))
+            return " " + " ".join(parts)
+
         print("")
-        print("=" * 120)
+        print("━" * _TABLE_WIDTH)
         print(f"  可选课程列表（共 {len(courses)} 门，按剩余名额降序）")
-        print("=" * 120)
-        print(f"  {'序号':>4s}  {'JxbBh':<12s}  {'课程名称':<30s}  {'教师':<12s}  "
-              f"{'学分':>4s}  {'已选/容量':>10s}  {'剩余':>4s}  {'上课时间':<20s}")
-        print("  " + "-" * 112)
+        print("━" * _TABLE_WIDTH)
+        print(_build_row([cd[0] for cd in _COL_DEFS], "header"))
+        print(_build_row([], "sep"))
         for i, c in enumerate(courses, 1):
-            remain_str = str(c.remain) if c.remain > 0 else "满"
+            status = "满" if c.is_full else "可"
             cap_str = f"{c.enrolled}/{c.capacity}"
-            print(f"  {i:>4d}  {c.jxb_bh:<12s}  {c.course_name:<30s}  {c.teacher:<12s}  "
-                  f"{c.credit:>4s}  {cap_str:>10s}  {remain_str:>4s}  {c.schedule:<20s}")
-        print("=" * 120)
+            row = [i, c.jxb_bh, c.course_name, c.teacher, c.credit,
+                   cap_str, status, c.schedule]
+            print(_build_row(row, "data"))
+        print("━" * _TABLE_WIDTH)
 
     def _interactive_select_courses(self, courses: List[CourseInfo]) -> List[CourseInfo]:
         """
