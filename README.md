@@ -2,6 +2,8 @@
 
 一套基于 Python 的江西农业大学教务系统自动化工具，涵盖**自动抢课**、**成绩查询**与**课表查询**三大场景。利用 `requests` 库模拟自研 ASP.NET MVC 教务系统 HTTP 请求，配合 `ddddocr` 离线 OCR 实现验证码自动识别，无需人工干预。
 
+> **🚀 新增：GUI 一体化桌面应用！** 三个脚本整合到统一图形界面，三标签页切换 + 共享登录会话，无需分别运行各脚本。前往 [工具四：GUI 一体化桌面应用](#工具四gui-一体化桌面应用-jxau_jiaowu_gui) 下载 `JXAU教务一体化.exe`。
+
 ---
 
 ## 工具一：抢课脚本 (`jxau_course_grabber.py`)
@@ -117,6 +119,27 @@ set JXAU_STU_ID=2024xxxxxx
 set JXAU_PASS=your_password
 python jxau_schedule_query.py
 ```
+
+---
+
+## 工具四：GUI 一体化桌面应用 (`JXAU教务一体化.exe`)
+
+将上述三个脚本整合为统一的 Windows 桌面应用程序，免安装 Python 环境，双击即用。
+
+### 功能特性
+
+- **三标签页界面** — 抢课选课、成绩查询、课表查询三个模块集成在一个窗口
+- **共享登录会话** — 登录一次后三个模块共用 Session，无需重复输入账号密码
+- **可视化课表** — Canvas 网格化渲染，上午/下午/晚上分区，支持垂直滚动
+- **成绩 Treeview** — 表格化成绩明细，学期切换 + 汇总统计
+- **实时运行日志** — 底部日志面板，所有操作可见、可追踪
+- **便携免安装** — 单文件 exe，拷贝即用，无需 Python 环境
+
+### 下载与使用
+
+从 [Releases](https://github.com/xlx0131/-JXAU-/raw/main/JXAU%E6%95%99%E5%8A%A1%E4%B8%80%E4%BD%93%E5%8C%96.exe) 下载 `JXAU教务一体化.exe`，双击运行即可。
+
+> **注意**：首次运行时 Windows Defender 可能弹出 SmartScreen 警告，点击「更多信息」→「仍要运行」即可。这是因为 exe 未经过数字签名，属正常现象。
 
 ---
 
