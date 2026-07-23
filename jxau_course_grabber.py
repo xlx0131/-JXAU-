@@ -92,6 +92,13 @@ def setup_logger(name: str = "CourseGrabber") -> logging.Logger:
 logger = setup_logger()
 
 # =============================================================================
+# 登录重试配置
+# =============================================================================
+# 登录环节遇网络异常（超时/503/连接拒绝/SSLError 等）时的最大重试次数
+# 每次重试按指数退避等待：2s → 4s → 8s → ... 最长 60s
+MAX_LOGIN_RETRIES: int = 10
+
+# =============================================================================
 # 排版辅助函数（统一中英文混排对齐方案）
 # =============================================================================
 
@@ -434,89 +441,108 @@ class JXAUAuthSession:
         """
         执行登录流程（自研 ASP.NET MVC 教务系统）
         步骤: 1) GET 登录页（获取 Session Cookie）→ 2) 获取验证码 → 3) POST 登录
+
+        网络异常（超时/503/连接拒绝/SSLError 等）时自动重试，最大重试次数由
+        顶层常量 MAX_LOGIN_RETRIES 控制，每次重试按指数退避等待。
+        验证码识别失败/凭据错误等非网络异常不重试，保持现有降级逻辑。
         """
-        logger.info("开始登录流程 ...")
+        last_error = ""
 
-        # ── Step 1: GET 登录页，获取 Session Cookie ────────────────────
-        try:
-            resp = self.session.get(
-                self.config.LOGIN_URL,
-                timeout=self.config.REQUEST_TIMEOUT,
-            )
-            resp.encoding = "utf-8"
-            logger.debug(f"登录页状态码: {resp.status_code}")
-        except requests.RequestException as e:
-            logger.error(f"访问登录页失败: {e}")
-            return False
+        for attempt in range(1, MAX_LOGIN_RETRIES + 1):
+            try:
+                logger.info(f"开始登录流程 (第{attempt}次尝试) ...")
 
-        # ── Step 2: 获取验证码 ──────────────────────────────────────────
-        captcha_code = self._fetch_and_recognize_captcha()
-        if not captcha_code:
-            logger.error("验证码获取失败，登录终止")
-            return False
+                # ── Step 1: GET 登录页，获取 Session Cookie ──────────────
+                resp = self.session.get(
+                    self.config.LOGIN_URL,
+                    timeout=self.config.REQUEST_TIMEOUT,
+                )
+                resp.encoding = "utf-8"
+                logger.debug(f"登录页状态码: {resp.status_code}")
 
-        # ── Step 3: POST 登录 ──────────────────────────────────────────
-        login_data = {
-            "UserName": self.config.STUDENT_ID,
-            "PassWord": self.config.PASSWORD,
-            "validation": captcha_code,
-        }
-        logger.debug(f"登录参数: UserName={login_data['UserName']}, "
-                     f"PassWord=***, validation={login_data['validation']}")
+                # ── Step 2: 获取验证码 ────────────────────────────────────
+                captcha_code = self._fetch_and_recognize_captcha()
+                if not captcha_code:
+                    # 验证码识别失败（OCR/手动输入均失败），非网络异常，不重试
+                    logger.error("验证码获取失败，登录终止")
+                    return False
 
-        try:
-            resp = self.session.post(
-                self.config.LOGIN_POST_URL,
-                data=login_data,
-                timeout=self.config.REQUEST_TIMEOUT,
-                allow_redirects=True,        # ASP.NET 登录后通常 redirect
-            )
-            resp.encoding = "utf-8"
-        except requests.RequestException as e:
-            logger.error(f"登录请求失败: {e}")
-            return False
+                # ── Step 3: POST 登录 ────────────────────────────────────
+                login_data = {
+                    "UserName": self.config.STUDENT_ID,
+                    "PassWord": self.config.PASSWORD,
+                    "validation": captcha_code,
+                }
+                logger.debug(f"登录参数: UserName={login_data['UserName']}, "
+                             f"PassWord=***, validation={login_data['validation']}")
 
-        # ── Step 4: 验证登录是否成功 ────────────────────────────────────
-        if self._check_login_success(resp):
-            self.logged_in = True
-            # 从最终 URL 中提取会话 GUID（后续选课提交接口需要）
-            guid_match = re.search(
-                r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-                resp.url, re.I
-            )
-            if guid_match:
-                self.session_guid = guid_match.group()
-                logger.info(f"会话 GUID: {self.session_guid}")
-            else:
-                logger.warning("未能从 URL 中提取会话 GUID，选课提交接口可能无法使用")
-            logger.info("=== 登录成功 ===")
-            return True
-        else:
-            logger.warning("登录失败，请检查学号/密码/验证码")
-            logger.debug(f"最终 URL: {resp.url}")
-            logger.debug(f"响应内容(前500字): {resp.text[:500]}")
-            return False
+                resp = self.session.post(
+                    self.config.LOGIN_POST_URL,
+                    data=login_data,
+                    timeout=self.config.REQUEST_TIMEOUT,
+                    allow_redirects=True,        # ASP.NET 登录后通常 redirect
+                )
+                resp.encoding = "utf-8"
+
+                # ── Step 4: 验证登录是否成功 ──────────────────────────────
+                if self._check_login_success(resp):
+                    self.logged_in = True
+                    # 从最终 URL 中提取会话 GUID（后续选课提交接口需要）
+                    guid_match = re.search(
+                        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                        resp.url, re.I
+                    )
+                    if guid_match:
+                        self.session_guid = guid_match.group()
+                        logger.info(f"会话 GUID: {self.session_guid}")
+                    else:
+                        logger.warning("未能从 URL 中提取会话 GUID，选课提交接口可能无法使用")
+                    logger.info("=== 登录成功 ===")
+                    return True
+                else:
+                    # 凭据/验证码错误，非网络异常，不重试
+                    logger.warning("登录失败，请检查学号/密码/验证码")
+                    logger.debug(f"最终 URL: {resp.url}")
+                    logger.debug(f"响应内容(前500字): {resp.text[:500]}")
+                    return False
+
+            except requests.RequestException as e:
+                last_error = str(e)
+                if attempt < MAX_LOGIN_RETRIES:
+                    delay = min(2 ** attempt, 60)
+                    logger.warning(
+                        f"登录失败（{last_error}），"
+                        f"{delay}秒后第{attempt + 1}次重试 ..."
+                    )
+                    time.sleep(delay)
+                continue
+
+        # 全部重试用完仍未成功
+        logger.error(
+            f"已达最大重试次数({MAX_LOGIN_RETRIES})，"
+            f"登录仍未成功，请检查网络连接。最后错误: {last_error}"
+        )
+        return False
 
     def _fetch_and_recognize_captcha(self) -> str:
         """
         获取验证码图片（加时间戳防缓存）并识别
         验证码 Cookie 与图片绑定，必须用同一 Session
+
+        网络异常（超时/连接拒绝等）直接透传，由 login() 的 retry 循环处理；
+        HTTP 非 200 或 OCR/手动识别失败则返回空字符串（非网络异常，不重试）。
         """
         captcha_handler = CaptchaHandler(self.config)
         # 加时间戳参数防止浏览器缓存影响
         captcha_url = f"{self.config.CAPTCHA_URL}?t={int(time.time() * 1000)}"
-        try:
-            resp = self.session.get(
-                captcha_url,
-                timeout=self.config.REQUEST_TIMEOUT,
-            )
-            if resp.status_code != 200:
-                logger.error(f"获取验证码失败, HTTP {resp.status_code}")
-                return ""
-            return captcha_handler.recognize(resp.content, img_name="login_captcha")
-        except requests.RequestException as e:
-            logger.error(f"获取验证码图片异常: {e}")
+        resp = self.session.get(
+            captcha_url,
+            timeout=self.config.REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.error(f"获取验证码失败, HTTP {resp.status_code}")
             return ""
+        return captcha_handler.recognize(resp.content, img_name="login_captcha")
 
     def _check_login_success(self, resp: requests.Response) -> bool:
         """
