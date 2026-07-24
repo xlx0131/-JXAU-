@@ -496,12 +496,68 @@ class JXAUAuthSession:
                         self.session_guid = guid_match.group()
                         logger.info(f"会话 GUID: {self.session_guid}")
                     else:
-                        logger.warning("未能从 URL 中提取会话 GUID，选课提交接口可能无法使用")
+                        logger.warning(f"URL 中未找到 GUID，实际 URL: {resp.url}")
+                        # 输出所有 Cookie 便于排查
+                        all_cookies = {k: v for k, v in self.session.cookies.items()}
+                        logger.debug(f"当前所有 Cookie: {all_cookies}")
+
+                        # 备用方案1: 从 Cookie 中提取 ASP.NET 会话标识
+                        for cookie_name in ["ASP.NET_SessionId", "session_guid", "guid",
+                                             "JSESSIONID", ".ASPXAUTH"]:
+                            if cookie_name in self.session.cookies:
+                                val = self.session.cookies[cookie_name]
+                                logger.info(f"从 Cookie [{cookie_name}] 提取到: {val}")
+                                self.session_guid = val
+                                break
+
+                        # 备用方案2: 从响应正文中搜索 GUID
+                        if not self.session_guid:
+                            body_guid = re.search(
+                                r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                                resp.text, re.I
+                            )
+                            if body_guid:
+                                self.session_guid = body_guid.group()
+                                logger.info(f"从响应正文提取到 GUID: {self.session_guid}")
+                            else:
+                                # 备用方案3: 请求主页面，从页面内容中提取 GUID
+                                logger.info("尝试从主页面提取 GUID ...")
+                                try:
+                                    main_resp = self.session.get(
+                                        self.config.BASE_URL,
+                                        timeout=self.config.REQUEST_TIMEOUT
+                                    )
+                                    main_guid = re.search(
+                                        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                                        main_resp.text + main_resp.url, re.I
+                                    )
+                                    if main_guid:
+                                        self.session_guid = main_guid.group()
+                                        logger.info(f"从主页面提取到 GUID: {self.session_guid}")
+                                    else:
+                                        logger.warning("所有途径均未能提取会话 GUID，后续 API 调用将失败")
+                                except Exception as e:
+                                    logger.warning(f"请求主页面失败: {e}")
+
                     logger.info("=== 登录成功 ===")
                     return True
                 else:
                     # 凭据/验证码错误，非网络异常，不重试
-                    logger.warning("登录失败，请检查学号/密码/验证码")
+                    # 尝试从 URL 的 msg 参数中提取服务器真实错误信息
+                    error_msg = None
+                    if "msg=" in resp.url:
+                        try:
+                            from urllib.parse import urlparse, parse_qs, unquote
+                            params = parse_qs(urlparse(resp.url).query)
+                            msg_raw = params.get("msg", [None])[0]
+                            if msg_raw:
+                                error_msg = unquote(msg_raw)
+                        except Exception:
+                            pass
+                    if error_msg:
+                        logger.warning(f"登录失败: {error_msg}")
+                    else:
+                        logger.warning("登录失败，请检查学号/密码/验证码")
                     logger.debug(f"最终 URL: {resp.url}")
                     logger.debug(f"响应内容(前500字): {resp.text[:500]}")
                     return False
@@ -548,16 +604,25 @@ class JXAUAuthSession:
         """
         校验登录是否成功（ASP.NET MVC 自研系统）
         判断依据（按优先级）:
-          1. 重定向到主页 / 非登录页
-          2. 响应内容含"退出/注销/欢迎"
-          3. 响应 JSON 含 success 标识
+          1. 明确失败特征（login=false 参数、错误信息等）
+          2. 重定向到主页 / 非登录页（且非 login=false）
+          3. 响应内容含"退出/注销/欢迎"
+          4. 响应 JSON 含 success 标识
         """
+        url_lower = resp.url.lower()
+
+        # 方式零：明确失败特征（优先判断，防止误判）
+        if "login=false" in url_lower or "login=failure" in url_lower:
+            return False
+        if "用户名或密码错误" in resp.text or "密码错误" in resp.text:
+            return False
+
         # 方式一：检查是否跳转离开登录页
-        if "login" not in resp.url.lower():
+        if "login" not in url_lower:
             return True
 
-        # 方式二：检查内容关键词
-        for keyword in ["退出", "注销", "欢迎", "logout", "main"]:
+        # 方式二：检查内容关键词（仅高置信度关键词，main 太宽泛已移除）
+        for keyword in ["退出", "注销", "欢迎", "logout"]:
             if keyword in resp.text:
                 return True
 
@@ -1409,7 +1474,7 @@ def config_demo():
     """
     config = GrabberConfig(
         BASE_URL="https://jwgl.jxau.edu.cn",
-        STUDENT_ID="2024xxxxxx",          # 替换为真实学号
+        STUDENT_ID="6020xxxxxx",          # 替换为真实学号
         PASSWORD="your_password",          # 替换为真实密码
         YEAR_TERM=get_default_year_term(),
     )

@@ -295,21 +295,67 @@ class JXAUAuthSession:
                 logger.info(f"会话 GUID: {self.session_guid}")
             else:
                 # 尝试从 Cookie / 隐藏字段中提取
-                logger.warning("未从 URL 提取到 GUID，尝试从页面内容提取...")
-                guid_match = re.search(
-                    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
-                    resp.text, re.I
-                )
-                if guid_match:
-                    self.session_guid = guid_match.group()
-                    logger.info(f"会话 GUID (页面): {self.session_guid}")
-                else:
-                    logger.error("无法获取会话 GUID，课表查询接口可能不可用")
+                logger.warning(f"未从 URL 提取到 GUID，实际 URL: {resp.url}")
+                all_cookies = {k: v for k, v in self.session.cookies.items()}
+                logger.debug(f"当前所有 Cookie: {all_cookies}")
+
+                # 备用方案1: Cookie
+                for cn in ["ASP.NET_SessionId", "session_guid", "guid",
+                            "JSESSIONID", ".ASPXAUTH"]:
+                    if cn in self.session.cookies:
+                        self.session_guid = self.session.cookies[cn]
+                        logger.info(f"从 Cookie [{cn}] 提取到: {self.session_guid}")
+                        break
+
+                # 备用方案2: 响应正文
+                if not self.session_guid:
+                    guid_match = re.search(
+                        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                        resp.text, re.I
+                    )
+                    if guid_match:
+                        self.session_guid = guid_match.group()
+                        logger.info(f"从响应正文提取到 GUID: {self.session_guid}")
+
+                # 备用方案3: 请求主页面
+                if not self.session_guid:
+                    logger.info("尝试从主页面提取 GUID ...")
+                    try:
+                        main_resp = self.session.get(
+                            self.config.BASE_URL,
+                            timeout=self.config.REQUEST_TIMEOUT
+                        )
+                        main_guid = re.search(
+                            r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                            main_resp.text + main_resp.url, re.I
+                        )
+                        if main_guid:
+                            self.session_guid = main_guid.group()
+                            logger.info(f"从主页面提取到 GUID: {self.session_guid}")
+                    except Exception as e:
+                        logger.warning(f"请求主页面失败: {e}")
+
+                if not self.session_guid:
+                    logger.error("所有途径均未提取到会话 GUID，课表查询接口不可用")
                     return False
             logger.info("=== 登录成功 ===")
             return True
         else:
-            logger.warning("登录失败，请检查学号/密码/验证码")
+            # 尝试从 URL 的 msg 参数中提取服务器真实错误信息
+            error_msg = None
+            if "msg=" in resp.url:
+                try:
+                    from urllib.parse import urlparse, parse_qs, unquote
+                    params = parse_qs(urlparse(resp.url).query)
+                    msg_raw = params.get("msg", [None])[0]
+                    if msg_raw:
+                        error_msg = unquote(msg_raw)
+                except Exception:
+                    pass
+            if error_msg:
+                logger.warning(f"登录失败: {error_msg}")
+            else:
+                logger.warning("登录失败，请检查学号/密码/验证码")
             return False
 
     def _fetch_and_recognize_captcha(self) -> str:
@@ -331,9 +377,15 @@ class JXAUAuthSession:
 
     def _check_login_success(self, resp: requests.Response) -> bool:
         """校验登录是否成功"""
-        if "login" not in resp.url.lower():
+        url_lower = resp.url.lower()
+        # 明确失败特征（优先判断）
+        if "login=false" in url_lower or "login=failure" in url_lower:
+            return False
+        if "用户名或密码错误" in resp.text or "密码错误" in resp.text:
+            return False
+        if "login" not in url_lower:
             return True
-        for keyword in ["退出", "注销", "欢迎", "logout", "main"]:
+        for keyword in ["退出", "注销", "欢迎", "logout"]:
             if keyword in resp.text:
                 return True
         try:
