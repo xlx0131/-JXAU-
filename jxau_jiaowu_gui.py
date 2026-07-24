@@ -216,8 +216,8 @@ class JiaowuGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("江西农业大学 · 教务一体化工具")
-        self.root.geometry("1400x960")
-        self.root.minsize(1100, 760)
+        self.root.geometry("1050x700")
+        self.root.minsize(900, 600)
         self.root.configure(bg=self.COLORS["bg"])
 
         self._setup_styles()
