@@ -40,9 +40,18 @@ import logging
 import json
 import csv
 
+import base64
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 CAPTCHA_DIR = os.path.join(SCRIPT_DIR, "captcha_cache")
+
+# 登录凭据保存文件
+if getattr(sys, 'frozen', False):
+    _SAVE_DIR = os.path.dirname(sys.executable)
+else:
+    _SAVE_DIR = SCRIPT_DIR
+CREDENTIAL_FILE = os.path.join(_SAVE_DIR, ".jxau_cred.dat")
 
 
 # =============================================================================
@@ -241,6 +250,7 @@ class JiaowuGUI:
         self._logger.info("GUI 启动完成")
 
         self._build_ui()
+        self._load_saved_credentials()
         self._main_pane.bind("<Map>", self._on_pane_mapped)
         self._poll_log()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -282,8 +292,52 @@ class JiaowuGUI:
                  font=("微软雅黑", 8), fg="#cce0ff",
                  bg=self.COLORS["accent"]).pack(side="right", padx=14)
 
+        # ── 主内容区：左侧功能区 + 右侧信息栏 ──────────────────────────
+        content_wrapper = tk.Frame(self.root, bg=self.COLORS["bg"])
+        content_wrapper.pack(fill="both", expand=True)
+
+        left_frame = tk.Frame(content_wrapper, bg=self.COLORS["bg"])
+        left_frame.pack(side="left", fill="both", expand=True)
+
+        # 右侧信息栏
+        right_panel = tk.Frame(content_wrapper, bg="#f5f5f5", width=200)
+        right_panel.pack(side="right", fill="y")
+        right_panel.pack_propagate(False)
+
+        right_inner = tk.Frame(right_panel, bg="#f5f5f5", padx=12, pady=14)
+        right_inner.pack(fill="both", expand=True)
+
+        tk.Label(right_inner, text="免责声明", font=("微软雅黑", 10, "bold"),
+                 fg="#333", bg="#f5f5f5").pack(anchor="w", pady=(0, 6))
+        tk.Label(right_inner, text=(
+            "本工具仅供学习研究使用。\n"
+            "请勿用于任何非法用途。\n"
+            "使用者需自行承担\n"
+            "因使用本工具产生的\n"
+            "一切后果与责任。\n"
+            "作者不承担任何\n"
+            "连带法律责任。"
+        ), font=("微软雅黑", 8), fg="#666", bg="#f5f5f5",
+           justify="left", wraplength=172).pack(anchor="w", pady=(0, 12))
+
+        ttk.Separator(right_inner, orient="horizontal").pack(fill="x", pady=4)
+
+        tk.Label(right_inner, text="作者信息", font=("微软雅黑", 10, "bold"),
+                 fg="#333", bg="#f5f5f5").pack(anchor="w", pady=(12, 6))
+        tk.Label(right_inner, text="作者：许立鑫",
+                 font=("微软雅黑", 9), fg="#444", bg="#f5f5f5").pack(anchor="w", pady=1)
+        tk.Label(right_inner, text="GitHub：xlx0131",
+                 font=("Consolas", 9), fg="#0366d6", bg="#f5f5f5").pack(anchor="w", pady=1)
+
+        ttk.Separator(right_inner, orient="horizontal").pack(fill="x", pady=(10, 4))
+
+        tk.Label(right_inner, text="侵权联系", font=("微软雅黑", 10, "bold"),
+                 fg="#c0392b", bg="#f5f5f5").pack(anchor="w", pady=(8, 6))
+        tk.Label(right_inner, text="xlx20050131",
+                 font=("Consolas", 9, "bold"), fg="#c0392b", bg="#f5f5f5").pack(anchor="w")
+
         # ── 登录区域（所有标签页共享） ─────────────────────────────────
-        self._login_frame = ttk.LabelFrame(self.root, text=" 登录信息 ",
+        self._login_frame = ttk.LabelFrame(left_frame, text=" 登录信息 ",
                                            padding=(12, 10))
         self._login_frame.pack(fill="x", padx=pad_x, pady=(6, 4))
 
@@ -301,6 +355,8 @@ class JiaowuGUI:
         self._show_pass = tk.BooleanVar(value=False)
         ttk.Checkbutton(r1, text="显示", variable=self._show_pass,
                         command=self._toggle_password).pack(side="left")
+        self._remember_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(r1, text="记住账号密码", variable=self._remember_var).pack(side="left", padx=(16, 0))
 
         r2 = ttk.Frame(self._login_frame)
         r2.pack(fill="x", pady=2)
@@ -332,7 +388,7 @@ class JiaowuGUI:
         self._status_detail.pack(side="left", padx=(8, 0))
 
         # ── 垂直分割面板（标签页 + 日志可拖拽调整高度） ──────────────────
-        self._main_pane = tk.PanedWindow(self.root, orient="vertical",
+        self._main_pane = tk.PanedWindow(left_frame, orient="vertical",
                                           bg="#c8c8c8", sashpad=4,
                                           sashwidth=7, sashrelief="raised")
         self._main_pane.pack(fill="both", expand=True, padx=pad_x, pady=(0, pad_x))
@@ -742,6 +798,12 @@ class JiaowuGUI:
         self._sched_status_label.configure(text="已登录，可查询课表")
 
         self._logger.info("登录成功！")
+        # 记住账号密码（如已勾选）
+        if self._remember_var.get():
+            self._save_credentials(self._stu_id_var.get().strip(),
+                                   self._pass_var.get())
+        else:
+            self._clear_credentials()
         # 自动加载课程和学期
         self._refresh_grab_courses()
         self._refresh_semesters()
@@ -1409,6 +1471,42 @@ class JiaowuGUI:
 
     def _clear_log(self):
         self._log_text.delete("1.0", "end")
+
+    def _save_credentials(self, stu_id, password):
+        """保存登录凭据到本地文件（base64 简单混淆）"""
+        try:
+            encoded_pwd = base64.b64encode(password.encode("utf-8")).decode("utf-8")
+            data = {"stu_id": stu_id, "password": encoded_pwd}
+            with open(CREDENTIAL_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception as e:
+            self._logger.warning(f"保存登录凭据失败: {e}")
+
+    def _load_saved_credentials(self):
+        """启动时加载已保存的登录凭据"""
+        if not os.path.exists(CREDENTIAL_FILE):
+            return
+        try:
+            with open(CREDENTIAL_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            stu_id = data.get("stu_id", "")
+            encoded_pwd = data.get("password", "")
+            if stu_id and encoded_pwd:
+                decoded_pwd = base64.b64decode(encoded_pwd).decode("utf-8")
+                self._stu_id_var.set(stu_id)
+                self._pass_var.set(decoded_pwd)
+                self._logger.info("已加载保存的登录凭据")
+        except Exception as e:
+            self._logger.warning(f"加载登录凭据失败: {e}")
+            self._clear_credentials()
+
+    def _clear_credentials(self):
+        """删除已保存的登录凭据"""
+        try:
+            if os.path.exists(CREDENTIAL_FILE):
+                os.remove(CREDENTIAL_FILE)
+        except Exception:
+            pass
 
     def _on_close(self):
         if self._running:
