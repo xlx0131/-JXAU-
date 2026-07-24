@@ -241,8 +241,15 @@ class JiaowuGUI:
         self._logger.info("GUI 启动完成")
 
         self._build_ui()
+        self.root.after(200, self._init_sash_position)
         self._poll_log()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _init_sash_position(self):
+        """设置 PanedWindow 初始分隔条位置：日志区占窗口约 30% 高度"""
+        total = self._main_pane.winfo_height()
+        if total > 0:
+            self._main_pane.sash_place(0, int(total * 0.70), 0)
 
     # ── ttk 样式 ───────────────────────────────────────────────────────────
     def _setup_styles(self):
@@ -320,9 +327,15 @@ class JiaowuGUI:
                                        bg=self.COLORS["frame_bg"])
         self._status_detail.pack(side="left", padx=(8, 0))
 
-        # ── Notebook 标签页 ────────────────────────────────────────────
-        self._notebook = ttk.Notebook(self.root)
-        self._notebook.pack(fill="both", expand=True, padx=pad_x, pady=(0, 2))
+        # ── 垂直分割面板（标签页 + 日志可拖拽调整高度） ──────────────────
+        self._main_pane = tk.PanedWindow(self.root, orient="vertical",
+                                          bg="#c8c8c8", sashpad=4,
+                                          sashwidth=7, sashrelief="raised")
+        self._main_pane.pack(fill="both", expand=True, padx=pad_x, pady=(0, pad_x))
+
+        # ── Notebook 标签页（上半部分） ──────────────────────────────────
+        self._notebook = ttk.Notebook(self._main_pane)
+        self._main_pane.add(self._notebook)
 
         # 标签页 1：抢课选课
         self._tab_grab = tk.Frame(self._notebook, bg=self.COLORS["bg"])
@@ -339,9 +352,9 @@ class JiaowuGUI:
         self._notebook.add(self._tab_schedule, text="  课表查询  ")
         self._build_schedule_tab()
 
-        # ── 底部日志 ───────────────────────────────────────────────────
-        log_frame = ttk.LabelFrame(self.root, text=" 运行日志 ", padding=(8, 6))
-        log_frame.pack(fill="both", expand=True, padx=pad_x, pady=(2, pad_x))
+        # ── 底部日志（下半部分） ─────────────────────────────────────────
+        log_frame = ttk.LabelFrame(self._main_pane, text=" 运行日志 ", padding=(8, 6))
+        self._main_pane.add(log_frame)
         log_toolbar = tk.Frame(log_frame, bg=self.COLORS["frame_bg"])
         log_toolbar.pack(fill="x", pady=(0, 4))
         tk.Button(log_toolbar, text="清空日志", font=("微软雅黑", 8),
