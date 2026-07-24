@@ -216,8 +216,8 @@ class JiaowuGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("江西农业大学 · 教务一体化工具")
-        self.root.geometry("1050x700")
-        self.root.minsize(900, 600)
+        self.root.geometry("1400x960")
+        self.root.minsize(1100, 760)
         self.root.configure(bg=self.COLORS["bg"])
 
         self._setup_styles()
@@ -241,15 +241,19 @@ class JiaowuGUI:
         self._logger.info("GUI 启动完成")
 
         self._build_ui()
-        self.root.after(200, self._init_sash_position)
+        self._main_pane.bind("<Map>", self._on_pane_mapped)
         self._poll_log()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _init_sash_position(self):
-        """设置 PanedWindow 初始分隔条位置：日志区占窗口约 30% 高度"""
+    def _on_pane_mapped(self, event=None):
+        """PanedWindow 首次映射后设置分隔条：日志区占约 15% 高度"""
+        self._main_pane.unbind("<Map>")
+        self.root.after(100, self._set_sash_compact)
+
+    def _set_sash_compact(self):
         total = self._main_pane.winfo_height()
         if total > 0:
-            self._main_pane.sash_place(0, int(total * 0.70), 0)
+            self._main_pane.sash_place(0, int(total * 0.85), 0)
 
     # ── ttk 样式 ───────────────────────────────────────────────────────────
     def _setup_styles(self):
